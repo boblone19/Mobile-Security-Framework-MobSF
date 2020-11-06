@@ -5,23 +5,33 @@ import os
 import re
 import shutil
 import subprocess
-import time
+import tempfile
 import threading
+import time
 
 from django.conf import settings
 
-from DynamicAnalyzer.tools.webproxy import (get_ca_dir,
-                                            start_proxy,
-                                            stop_httptools)
+from OpenSSL import crypto
+
+from DynamicAnalyzer.tools.webproxy import (
+    get_ca_file,
+    start_proxy,
+    stop_httptools,
+)
+
+from MobSF.utils import (
+    get_adb,
+    get_device,
+    get_proxy_ip,
+    is_file_exists,
+    python_list,
+)
 
 from StaticAnalyzer.models import StaticAnalyzerAndroid
 
-from MobSF.utils import (get_adb,
-                         get_device,
-                         get_proxy_ip,
-                         python_list)
-
 logger = logging.getLogger(__name__)
+ANDROID_API_SUPPORTED = 29
+FRIDA_VERSION = '14.0.5'
 
 
 class Environment:
@@ -32,11 +42,26 @@ class Environment:
         else:
             self.identifier = get_device()
         self.tools_dir = settings.TOOLS_DIR
+        self.frida_str = f'MobSF-Frida-{FRIDA_VERSION}'.encode('utf-8')
+        self.xposed_str = b'MobSF-Xposed'
 
     def wait(self, sec):
         """Wait in Seconds."""
         logger.info('Waiting for %s seconds...', str(sec))
         time.sleep(sec)
+
+    def check_connect_error(self, output):
+        """Check if connect failed."""
+        if b'unable to connect' in output or b'failed to connect' in output:
+            logger.error('%s', output.decode('utf-8').replace('\n', ''))
+            return False
+        return True
+
+    def run_subprocess_verify_output(self, command):
+        """Run subprocess and verify execution."""
+        out = subprocess.check_output(command)
+        self.wait(2)
+        return self.check_connect_error(out)
 
     def connect_n_mount(self):
         """Test ADB Connection."""
@@ -45,15 +70,60 @@ class Environment:
         logger.info('ADB Restarted')
         self.wait(2)
         logger.info('Connecting to Android %s', self.identifier)
-        out = subprocess.check_output([get_adb(), 'connect', self.identifier])
-        if b'unable to connect' in out or b'failed to connect' in out:
-            logger.error('%s', out.decode('utf-8').replace('\n', ''))
+        if not self.run_subprocess_verify_output([get_adb(),
+                                                 'connect',
+                                                  self.identifier]):
             return False
-        else:
-            logger.info('Remounting /system')
-            self.adb_command(['mount', '-o',
-                              'rw,remount', '/system'], True)
+        logger.info('Restarting ADB Daemon as root')
+        if not self.run_subprocess_verify_output([get_adb(),
+                                                  '-s',
+                                                  self.identifier,
+                                                  'root']):
+            return False
+        logger.info('Reconnecting to Android Device')
+        # connect again with root adb
+        if not self.run_subprocess_verify_output([get_adb(),
+                                                  'connect',
+                                                  self.identifier]):
+            return False
+        # identify environment
+        runtime = self.get_environment()
+        logger.info('Remounting')
+        # Allow non supported environments also
+        self.adb_command(['remount'])
+        logger.info('Performing System check')
+        if not self.system_check(runtime):
+            return False
         return True
+
+    def is_package_installed(self, package):
+        """Check if package is installed."""
+        out = self.adb_command(['pm', 'list', 'packages'], True)
+        pkg = f'{package}'.encode('utf-8')
+        if pkg + b'\n' in out or pkg + b'\r\n' in out:
+            # Windows uses \r\n
+            return True
+        return False
+
+    def install_apk(self, apk_path, package):
+        """Install APK and Verify Installation."""
+        if self.is_package_installed(package):
+            logger.info('Removing existing installation')
+            # Remove existing installation'
+            self.adb_command(['uninstall', package], False, True)
+        logger.info('Installing APK')
+        # Install APK
+        out = self.adb_command([
+            'install',
+            '-r',
+            '-t',
+            '-d',
+            apk_path], False, True)
+        if not out:
+            return False, 'adb install failed'
+        out = out.decode('utf-8', 'ignore')
+        # Verify Installation
+        return self.is_package_installed(package), out
 
     def adb_command(self, cmd_list, shell=False, silent=False):
         """ADB Command wrapper."""
@@ -63,9 +133,10 @@ class Environment:
         if shell:
             args += ['shell']
         args += cmd_list
-
         try:
-            result = subprocess.check_output(args)
+            result = subprocess.check_output(
+                args,
+                stderr=subprocess.STDOUT)
             return result
         except Exception:
             if not silent:
@@ -88,6 +159,7 @@ class Environment:
 
     def configure_proxy(self, project):
         """HTTPS Proxy."""
+        self.install_mobsf_ca('install')
         proxy_port = settings.PROXY_PORT
         logger.info('Starting HTTPs Proxy on %s', proxy_port)
         stop_httptools(proxy_port)
@@ -95,17 +167,31 @@ class Environment:
 
     def install_mobsf_ca(self, action):
         """Install or Remove MobSF Root CA."""
-        ca_file = os.path.join('/system/etc/security/cacerts/',
-                               settings.ROOT_CA)
+        mobsf_ca = get_ca_file()
+        ca_file = None
+        if is_file_exists(mobsf_ca):
+            ca_construct = '{}.0'
+            pem = open(mobsf_ca, 'rb').read()
+            ca_obj = crypto.load_certificate(crypto.FILETYPE_PEM, pem)
+            ca_file_hash = hex(ca_obj.subject_name_hash()).lstrip('0x')
+            ca_file = os.path.join('/system/etc/security/cacerts/',
+                                   ca_construct.format(ca_file_hash))
+        else:
+            logger.warning('mitmproxy root CA is not generated yet.')
+            return
         if action == 'install':
             logger.info('Installing MobSF RootCA')
-            self.adb_command(['push', get_ca_dir(), ca_file])
+            self.adb_command(['push',
+                              mobsf_ca,
+                              ca_file])
             self.adb_command(['chmod',
                               '644',
                               ca_file], True)
         elif action == 'remove':
             logger.info('Removing MobSF RootCA')
-            self.adb_command(['rm', ca_file], True)
+            self.adb_command(['rm',
+                              ca_file], True)
+        # with a high timeout afterwards
 
     def set_global_proxy(self, version):
         """Set Global Proxy on device."""
@@ -115,7 +201,7 @@ class Environment:
         if version < 5:
             proxy_ip = get_proxy_ip(self.identifier)
         else:
-            proxy_ip = '127.0.0.1'
+            proxy_ip = settings.PROXY_IP
         if proxy_ip:
             if version < 4.4:
                 logger.warning('Please set Android VM proxy as %s:%s',
@@ -147,6 +233,12 @@ class Environment:
              'delete',
              'global',
              'global_http_proxy_port'], True)
+        self.adb_command(
+            ['settings',
+             'put',
+             'global',
+             'http_proxy',
+             ':0'], True)
 
     def enable_adb_reverse_tcp(self, version):
         """Enable ADB Reverse TCP for Proxy."""
@@ -224,21 +316,50 @@ class Environment:
 
     def android_component(self, bin_hash, comp):
         """Get APK Components."""
-        anddb = StaticAnalyzerAndroid.objects.filter(MD5=bin_hash)
+        anddb = StaticAnalyzerAndroid.objects.get(MD5=bin_hash)
         resp = []
         if comp == 'activities':
-            resp = python_list(anddb[0].ACTIVITIES)
+            resp = python_list(anddb.ACTIVITIES)
         elif comp == 'receivers':
-            resp = python_list(anddb[0].RECEIVERS)
+            resp = python_list(anddb.RECEIVERS)
         elif comp == 'providers':
-            resp = python_list(anddb[0].PROVIDERS)
+            resp = python_list(anddb.PROVIDERS)
         elif comp == 'services':
-            resp = python_list(anddb[0].SERVICES)
+            resp = python_list(anddb.SERVICES)
         elif comp == 'libraries':
-            resp = python_list(anddb[0].LIBRARIES)
+            resp = python_list(anddb.LIBRARIES)
         elif comp == 'exported_activities':
-            resp = python_list(anddb[0].EXPORTED_ACTIVITIES)
+            resp = python_list(anddb.EXPORTED_ACTIVITIES)
         return '\n'.join(resp)
+
+    def get_environment(self):
+        """Identify the environment."""
+        out = self.adb_command(['getprop',
+                                'ro.boot.serialno'], True)
+        out += self.adb_command(['getprop',
+                                 'ro.serialno'], True)
+        out += self.adb_command(['getprop',
+                                 'ro.build.user'], True)
+        out += self.adb_command(['getprop',
+                                 'ro.manufacturer.geny-def'], True)
+        out += self.adb_command(['getprop',
+                                 'ro.product.manufacturer.geny-def'], True)
+        ver = self.adb_command(['getprop',
+                                'ro.genymotion.version'],
+                               True).decode('utf-8', 'ignore')
+        if b'EMULATOR' in out:
+            logger.info('Found Android Studio Emulator')
+            return 'emulator'
+        elif (b'genymotion' in out.lower()
+                or any(char.isdigit() for char in ver)):
+            logger.info('Found Genymotion x86 Android VM')
+            return 'genymotion'
+        else:
+            logger.warning(
+                'Unable to identify Dynamic Analysis environment. '
+                'Official support is available only for Android '
+                'Emulator and Genymotion VM')
+            return ''
 
     def get_android_version(self):
         """Get Android version."""
@@ -253,9 +374,49 @@ class Environment:
 
     def get_android_arch(self):
         """Get Android Architecture."""
-        out = self.adb_command(['getprop',
-                                'ro.product.cpu.abi'], True)
+        out = self.adb_command([
+            'getprop',
+            'ro.product.cpu.abi'], True)
         return out.decode('utf-8').rstrip()
+
+    def system_check(self, runtime):
+        """Check if /system is writable."""
+        try:
+            try:
+                out = self.adb_command([
+                    'getprop',
+                    'ro.build.version.sdk'], True)
+                if out:
+                    api = int(out.decode('utf-8').strip())
+                    logger.info('Android API Level '
+                                'identified as %s', api)
+                    if api > ANDROID_API_SUPPORTED:
+                        logger.error('This API Level is not supported'
+                                     ' for Dynamic Analysis.')
+                        return False
+            except Exception:
+                pass
+            err_msg = ('VM\'s /system is not writable. '
+                       'This VM cannot be used for '
+                       'Dynamic Analysis.')
+            proc = subprocess.Popen([get_adb(),
+                                     '-s', self.identifier,
+                                     'shell',
+                                     'touch',
+                                     '/system/test'],
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE)
+            _, stderr = proc.communicate()
+            if b'Read-only' in stderr:
+                logger.error(err_msg)
+                if runtime == 'emulator':
+                    logger.error('Please start the AVD as per '
+                                 'MobSF documentation!')
+                return False
+        except Exception:
+            logger.error(err_msg)
+            return False
+        return True
 
     def launch_n_capture(self, package, activity, outfile):
         """Launch and Capture Activity."""
@@ -274,10 +435,10 @@ class Environment:
         logger.info('Environment MobSFyed Check')
         if android_version < 5:
             agent_file = '.mobsf-x'
-            agent_str = b'MobSF-Xposed'
+            agent_str = self.xposed_str
         else:
             agent_file = '.mobsf-f'
-            agent_str = b'MobSF-Frida'
+            agent_str = self.frida_str
         try:
             out = subprocess.check_output(
                 [get_adb(),
@@ -321,12 +482,15 @@ class Environment:
         self.adb_command(['install', '-r', clip_dump])
         if agent == 'frida':
             agent_file = '.mobsf-f'
+            agent_str = self.frida_str
         else:
             agent_file = '.mobsf-x'
-        mobsf_env = os.path.join(self.tools_dir,
-                                 mobsf_agents,
-                                 agent_file)
-        self.adb_command(['push', mobsf_env, '/system/' + agent_file])
+            agent_str = self.xposed_str
+        f = tempfile.NamedTemporaryFile(delete=False)
+        f.write(agent_str)
+        f.close()
+        self.adb_command(['push', f.name, '/system/' + agent_file])
+        os.unlink(f.name)
 
     def xposed_setup(self, android_version):
         """Setup Xposed."""
@@ -388,24 +552,37 @@ class Environment:
 
     def frida_setup(self):
         """Setup Frida."""
+        frida_arch = None
         frida_dir = 'onDevice/frida/'
-        frida_bin = os.path.join(self.tools_dir,
-                                 frida_dir,
-                                 'frida-server-12.7.20-android-x86')
         arch = self.get_android_arch()
-        logger.info('Android instance architecture identified as %s', arch)
-        if 'x86' not in arch:
-            logger.error('Make sure a Genymotion Android x86'
-                         'instance is running')
+        logger.info('Android OS architecture identified as %s', arch)
+        if arch in ['armeabi-v7a', 'armeabi']:
+            frida_arch = 'arm'
+        elif arch == 'arm64-v8a':
+            frida_arch = 'arm64'
+        elif arch == 'x86':
+            frida_arch = 'x86'
+        elif arch == 'x86_64':
+            frida_arch = 'x86_64'
+        else:
+            logger.error('Make sure a Genymotion Android x86 VM'
+                         ' or Android Studio Emulator'
+                         ' instance is running')
             return
-        logger.info('Copying frida server')
-        self.adb_command(['push', frida_bin, '/system/fd_server'])
+        frida_bin = 'frida-server-{}-android-{}'.format(
+            FRIDA_VERSION,
+            frida_arch)
+        frida_path = os.path.join(self.tools_dir,
+                                  frida_dir,
+                                  frida_bin)
+        logger.info('Copying frida server for %s', frida_arch)
+        self.adb_command(['push', frida_path, '/system/fd_server'])
         self.adb_command(['chmod', '755', '/system/fd_server'], True)
 
     def run_frida_server(self):
         """Start Frida Server."""
         check = self.adb_command(['ps'], True)
-        if b'/system/fd_server' in check:
+        if b'fd_server' in check:
             logger.info('Frida Server is already running')
             return
 
@@ -420,4 +597,6 @@ class Environment:
         trd = threading.Thread(target=start_frida)
         trd.daemon = True
         trd.start()
-        logger.info('Frida Server is running')
+        logger.info('Starting Frida Server')
+        logger.info('Waiting for 2 seconds...')
+        time.sleep(2)

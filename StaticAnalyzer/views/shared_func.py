@@ -26,7 +26,8 @@ from django.utils import timezone
 from django.utils.html import escape
 
 from MobSF import settings
-from MobSF.utils import (print_n_send_error_response,
+from MobSF.utils import (is_md5,
+                         print_n_send_error_response,
                          upstream_proxy)
 
 from StaticAnalyzer.models import (RecentScansDB,
@@ -49,11 +50,7 @@ except ImportError:
         'wkhtmltopdf is not installed/configured properly.'
         ' PDF Report Generation is disabled')
 logger = logging.getLogger(__name__)
-
-
-def file_size(app_path):
-    """Return the size of the file."""
-    return round(float(os.path.getsize(app_path)) / (1024 * 1024), 2)
+ctype = 'application/json; charset=utf-8'
 
 
 def hash_gen(app_path) -> tuple:
@@ -112,152 +109,100 @@ def pdf(request, api=False, jsonres=False):
     try:
         if api:
             checksum = request.POST['hash']
-            scan_type = request.POST['scan_type']
         else:
             checksum = request.GET['md5']
-            scan_type = request.GET['type']
         hash_match = re.match('^[0-9a-f]{32}$', checksum)
-        if hash_match:
-            if scan_type.lower() in ['apk', 'andzip']:
-                static_db = StaticAnalyzerAndroid.objects.filter(MD5=checksum)
-                if static_db.exists():
-                    logger.info(
-                        'Fetching data from DB for '
-                        'PDF Report Generation (Android)')
-                    context = adb(static_db)
-                    context['average_cvss'], context[
-                        'security_score'] = score(context['code_analysis'])
-                    if scan_type.lower() == 'apk':
-                        template = get_template(
-                            'pdf/android_binary_analysis.pdf.html')
-                    else:
-                        template = get_template(
-                            'pdf/android_source_analysis_pdf.html')
-                else:
-                    if api:
-                        return {'report': 'Report not Found'}
-                    else:
-                        return HttpResponse(
-                            json.dumps({'report': 'Report not Found'}),
-                            content_type='application/json; charset=utf-8',
-                            status=500)
-            elif scan_type.lower() in ['ipa', 'ioszip']:
-                if scan_type.lower() == 'ipa':
-                    static_db = StaticAnalyzerIOS.objects.filter(MD5=checksum)
-                    if static_db.exists():
-                        logger.info(
-                            'Fetching data from DB for '
-                            'PDF Report Generation (IOS IPA)')
-                        context = idb(static_db)
-                        context['average_cvss'], context[
-                            'security_score'] = score(
-                                context['binary_analysis'])
-                        template = get_template(
-                            'pdf/ios_binary_analysis_pdf.html')
-                    else:
-                        if api:
-                            return {'report': 'Report not Found'}
-                        else:
-                            return HttpResponse(
-                                json.dumps({'report': 'Report not Found'}),
-                                content_type='application/json; charset=utf-8',
-                                status=500)
-                elif scan_type.lower() == 'ioszip':
-                    static_db = StaticAnalyzerIOS.objects.filter(
-                        MD5=checksum)
-                    if static_db.exists():
-                        logger.info(
-                            'Fetching data from DB for '
-                            'PDF Report Generation (IOS ZIP)')
-                        context = idb(static_db)
-                        context['average_cvss'], context[
-                            'security_score'] = score(context['code_analysis'])
-                        template = get_template(
-                            'pdf/ios_source_analysis_pdf.html')
-                    else:
-                        if api:
-                            return {'report': 'Report not Found'}
-                        else:
-                            return HttpResponse(
-                                json.dumps({'report': 'Report not Found'}),
-                                content_type='application/json; charset=utf-8',
-                                status=500)
-            elif 'appx' == scan_type.lower():
-                if scan_type.lower() == 'appx':
-                    db_entry = StaticAnalyzerWindows.objects.filter(
-                        MD5=checksum,
-                    )
-                    if db_entry.exists():
-                        logger.info(
-                            'Fetching data from DB for '
-                            'PDF Report Generation (APPX)')
-                        context = wdb(db_entry)
-                        template = get_template(
-                            'pdf/windows_binary_analysis_pdf.html')
-            else:
-                if api:
-                    return {'scan_type': 'Type is not Allowed'}
-                else:
-                    return HttpResponse(
-                        json.dumps({'type': 'Type is not Allowed'}),
-                        content_type='application/json; charset=utf-8',
-                        status=500)
-
-            context['virus_total'] = None
-            if settings.VT_ENABLED:
-                app_dir = os.path.join(settings.UPLD_DIR, checksum + '/')
-                vt = VirusTotal.VirusTotal()
-                if 'zip' in scan_type.lower():
-                    context['virus_total'] = None
-                else:
-                    context['virus_total'] = vt.get_result(
-                        os.path.join(app_dir, checksum)
-                        + '.' + scan_type.lower(),
-                        checksum)
-            try:
-                if api and jsonres:
-                    return {'report_dat': context}
-                else:
-                    options = {
-                        'page-size': 'A4',
-                        'quiet': '',
-                        'no-collate': '',
-                        'margin-top': '0.50in',
-                        'margin-right': '0.50in',
-                        'margin-bottom': '0.50in',
-                        'margin-left': '0.50in',
-                        'encoding': 'UTF-8',
-                        'custom-header': [
-                            ('Accept-Encoding', 'gzip'),
-                        ],
-                        'no-outline': None,
-                    }
-                    html = template.render(context)
-                    pdf_dat = pdfkit.from_string(html, False, options=options)
-                    if api:
-                        return {'pdf_dat': pdf_dat}
-                    return HttpResponse(pdf_dat,
-                                        content_type='application/pdf')
-            except Exception as exp:
-                logger.exception('Error Generating PDF Report')
-                if api:
-                    return {
-                        'error': 'Cannot Generate PDF/JSON',
-                        'err_details': str(exp)}
-                else:
-                    return HttpResponse(
-                        json.dumps({'pdf_error': 'Cannot Generate PDF',
-                                    'err_details': str(exp)}),
-                        content_type='application/json; charset=utf-8',
-                        status=500)
-
-        else:
+        if not hash_match:
             if api:
                 return {'error': 'Invalid scan hash'}
             else:
                 return HttpResponse(
-                    json.dumps({'md5': 'Invalid MD5'}),
-                    content_type='application/json; charset=utf-8', status=500)
+                    json.dumps({'md5': 'Invalid scan hash'}),
+                    content_type=ctype, status=500)
+        # Do Lookups
+        android_static_db = StaticAnalyzerAndroid.objects.filter(
+            MD5=checksum)
+        ios_static_db = StaticAnalyzerIOS.objects.filter(
+            MD5=checksum)
+        win_static_db = StaticAnalyzerWindows.objects.filter(
+            MD5=checksum)
+
+        if android_static_db.exists():
+            context, template = handle_pdf_android(android_static_db)
+        elif ios_static_db.exists():
+            context, template = handle_pdf_ios(ios_static_db)
+        elif win_static_db.exists():
+            context, template = handle_pdf_win(win_static_db)
+        else:
+            if api:
+                return {'report': 'Report not Found'}
+            else:
+                return HttpResponse(
+                    json.dumps({'report': 'Report not Found'}),
+                    content_type=ctype,
+                    status=500)
+        # Do VT Scan only on binaries
+        context['virus_total'] = None
+        ext = os.path.splitext(context['file_name'].lower())[1]
+        if settings.VT_ENABLED and ext != '.zip':
+            app_bin = os.path.join(
+                settings.UPLD_DIR,
+                checksum + '/',
+                checksum + ext)
+            vt = VirusTotal.VirusTotal()
+            context['virus_total'] = vt.get_result(app_bin, checksum)
+        # Get Local Base URL
+        proto = 'file://'
+        host_os = 'nix'
+        if platform.system() == 'Windows':
+            proto = 'file:///'
+            host_os = 'windows'
+        context['base_url'] = proto + settings.BASE_DIR
+        context['dwd_dir'] = proto + settings.DWD_DIR
+        context['host_os'] = host_os
+        context['timestamp'] = RecentScansDB.objects.get(
+            MD5=checksum).TIMESTAMP
+        try:
+            if api and jsonres:
+                return {'report_dat': context}
+            else:
+                options = {
+                    'page-size': 'Letter',
+                    'quiet': '',
+                    'enable-local-file-access': '',
+                    'no-collate': '',
+                    'margin-top': '0.50in',
+                    'margin-right': '0.50in',
+                    'margin-bottom': '0.50in',
+                    'margin-left': '0.50in',
+                    'encoding': 'UTF-8',
+                    'custom-header': [
+                        ('Accept-Encoding', 'gzip'),
+                    ],
+                    'no-outline': None,
+                }
+                # Added proxy support to wkhtmltopdf
+                proxies, _ = upstream_proxy('https')
+                if proxies['https']:
+                    options['proxy'] = proxies['https']
+                html = template.render(context)
+                pdf_dat = pdfkit.from_string(html, False, options=options)
+                if api:
+                    return {'pdf_dat': pdf_dat}
+                return HttpResponse(pdf_dat,
+                                    content_type='application/pdf')
+        except Exception as exp:
+            logger.exception('Error Generating PDF Report')
+            if api:
+                return {
+                    'error': 'Cannot Generate PDF/JSON',
+                    'err_details': str(exp)}
+            else:
+                return HttpResponse(
+                    json.dumps({'pdf_error': 'Cannot Generate PDF',
+                                'err_details': str(exp)}),
+                    content_type=ctype,
+                    status=500)
     except Exception as exp:
         logger.exception('Error Generating PDF Report')
         msg = str(exp)
@@ -268,253 +213,52 @@ def pdf(request, api=False, jsonres=False):
             return print_n_send_error_response(request, msg, False, exp)
 
 
-def get_list_match_items(ruleset):
-    """Get List of Match item."""
-    match_list = []
-    i = 1
-    identifier = ruleset['type']
-    if ruleset['match'] == 'string_and_or':
-        identifier = 'string_or'
-    elif ruleset['match'] == 'string_or_and':
-        identifier = 'string_and'
-    while identifier + str(i) in ruleset:
-        match_list.append(ruleset[identifier + str(i)])
-        i = i + 1
-        if not (identifier + str(i)) in ruleset:
-            break
-    return match_list
-
-
-def add_findings(findings, desc, file_path, rule):
-    """Add Code Analysis Findings."""
-    if desc in findings:
-        tmp_list = findings[desc]['path']
-        if escape(file_path) not in tmp_list:
-            tmp_list.append(escape(file_path))
-            findings[desc]['path'] = tmp_list
+def handle_pdf_android(static_db):
+    logger.info(
+        'Fetching data from DB for '
+        'PDF Report Generation (Android)')
+    context = adb(static_db)
+    context['average_cvss'], context[
+        'security_score'] = score(context['code_analysis'])
+    if context['file_name'].lower().endswith('.zip'):
+        logger.info('Generating PDF report for android zip')
+        template = get_template(
+            'pdf/android_report.html')
     else:
-        findings[desc] = {'path': [escape(file_path)],
-                          'level': rule['level'],
-                          'cvss': rule['cvss'],
-                          'cwe': rule['cwe'],
-                          'owasp': rule['owasp']}
+        logger.info('Generating PDF report for android apk')
+        template = get_template(
+            'pdf/android_report.html')
+    return context, template
 
 
-def code_rule_matcher(findings, perms, data, file_path, code_rules):
-    """Static Analysis Rule Matcher."""
-    try:
-        for rule in code_rules:
-
-            # CASE CHECK
-            if rule['input_case'] == 'lower':
-                tmp_data = data.lower()
-            elif rule['input_case'] == 'upper':
-                tmp_data = data.upper()
-            elif rule['input_case'] == 'exact':
-                tmp_data = data
-
-            # MATCH TYPE
-            if rule['type'] == 'regex':
-                if rule['match'] == 'single_regex':
-                    if re.findall(rule['regex1'], tmp_data):
-                        add_findings(findings, rule[
-                                     'desc'], file_path, rule)
-                elif rule['match'] == 'regex_and':
-                    and_match_rgx = True
-                    match_list = get_list_match_items(rule)
-                    for match in match_list:
-                        if bool(re.findall(match, tmp_data)) is False:
-                            and_match_rgx = False
-                            break
-                    if and_match_rgx:
-                        add_findings(findings, rule[
-                                     'desc'], file_path, rule)
-                elif rule['match'] == 'regex_or':
-                    match_list = get_list_match_items(rule)
-                    for match in match_list:
-                        if re.findall(match, tmp_data):
-                            add_findings(findings, rule[
-                                         'desc'], file_path, rule)
-                            break
-                elif rule['match'] == 'regex_and_perm':
-                    if (rule['perm'] in perms
-                            and re.findall(rule['regex1'], tmp_data)):
-                        add_findings(findings, rule[
-                                     'desc'], file_path, rule)
-                else:
-                    logger.error('Code Regex Rule Match Error\n %s', rule)
-
-            elif rule['type'] == 'string':
-                if rule['match'] == 'single_string':
-                    if rule['string1'] in tmp_data:
-                        add_findings(findings, rule[
-                                     'desc'], file_path, rule)
-                elif rule['match'] == 'string_and':
-                    and_match_str = True
-                    match_list = get_list_match_items(rule)
-                    for match in match_list:
-                        if (match in tmp_data) is False:
-                            and_match_str = False
-                            break
-                    if and_match_str:
-                        add_findings(findings, rule[
-                                     'desc'], file_path, rule)
-                elif rule['match'] == 'string_or':
-                    match_list = get_list_match_items(rule)
-                    for match in match_list:
-                        if match in tmp_data:
-                            add_findings(findings, rule[
-                                         'desc'], file_path, rule)
-                            break
-                elif rule['match'] == 'string_and_or':
-                    match_list = get_list_match_items(rule)
-                    string_or_stat = False
-                    for match in match_list:
-                        if match in tmp_data:
-                            string_or_stat = True
-                            break
-                    if string_or_stat and (rule['string1'] in tmp_data):
-                        add_findings(findings, rule[
-                                     'desc'], file_path, rule)
-                elif rule['match'] == 'string_or_and':
-                    match_list = get_list_match_items(rule)
-                    string_and_stat = True
-                    for match in match_list:
-                        if match in tmp_data is False:
-                            string_and_stat = False
-                            break
-                    if string_and_stat or (rule['string1'] in tmp_data):
-                        add_findings(findings, rule[
-                                     'desc'], file_path, rule)
-                elif rule['match'] == 'string_and_perm':
-                    if (rule['perm'] in perms
-                            and rule['string1'] in tmp_data):
-                        add_findings(findings, rule[
-                                     'desc'], file_path, rule)
-                elif rule['match'] == 'string_or_and_perm':
-                    match_list = get_list_match_items(rule)
-                    string_or_ps = False
-                    for match in match_list:
-                        if match in tmp_data:
-                            string_or_ps = True
-                            break
-                    if (rule['perm'] in perms) and string_or_ps:
-                        add_findings(findings, rule[
-                                     'desc'], file_path, rule)
-                else:
-                    logger.error('Code String Rule Match Error\n%s', rule)
-            else:
-                logger.error('Code Rule Error\n%s', rule)
-    except Exception:
-        logger.exception('Error in Code Rule Processing')
-
-
-def add_apis(api_findings, desc, file_path):
-    """Add API Findings."""
-    if desc in api_findings:
-        tmp_list = api_findings[desc]['path']
-        if escape(file_path) not in tmp_list:
-            tmp_list.append(escape(file_path))
-            api_findings[desc]['path'] = tmp_list
+def handle_pdf_ios(static_db):
+    logger.info('Fetching data from DB for '
+                'PDF Report Generation (IOS)')
+    context = idb(static_db)
+    if context['file_name'].lower().endswith('.zip'):
+        logger.info('Generating PDF report for IOS zip')
+        context['average_cvss'], context[
+            'security_score'] = score(context['code_analysis'])
+        template = get_template(
+            'pdf/ios_report.html')
     else:
-        api_findings[desc] = {'path': [escape(file_path)]}
+        logger.info('Generating PDF report for IOS ipa')
+        context['average_cvss'], context[
+            'security_score'] = score(
+                context['binary_analysis'])
+        template = get_template(
+            'pdf/ios_report.html')
+    return context, template
 
 
-def api_rule_matcher(api_findings, perms, data, file_path, api_rules):
-    """Android API Analysis Rule Matcher."""
-    try:
-        for api in api_rules:
-
-            # CASE CHECK
-            if api['input_case'] == 'lower':
-                tmp_data = data.lower()
-            elif api['input_case'] == 'upper':
-                tmp_data = data.upper()
-            elif api['input_case'] == 'exact':
-                tmp_data = data
-
-            # MATCH TYPE
-            if api['type'] == 'regex':
-                if api['match'] == 'single_regex':
-                    if re.findall(api['regex1'], tmp_data):
-                        add_apis(api_findings, api['desc'], file_path)
-                elif api['match'] == 'regex_and':
-                    and_match_rgx = True
-                    match_list = get_list_match_items(api)
-                    for match in match_list:
-                        if bool(re.findall(match, tmp_data)) is False:
-                            and_match_rgx = False
-                            break
-                    if and_match_rgx:
-                        add_apis(api_findings, api['desc'], file_path)
-                elif api['match'] == 'regex_or':
-                    match_list = get_list_match_items(api)
-                    for match in match_list:
-                        if re.findall(match, tmp_data):
-                            add_apis(api_findings, api['desc'], file_path)
-                            break
-                elif api['match'] == 'regex_and_perm':
-                    if (api['perm'] in perms
-                            and re.findall(api['regex1'], tmp_data)):
-                        add_apis(api_findings, api['desc'], file_path)
-                else:
-                    logger.error('API Regex Rule Match Error\n %s', api)
-
-            elif api['type'] == 'string':
-                if api['match'] == 'single_string':
-                    if api['string1'] in tmp_data:
-                        add_apis(api_findings, api['desc'], file_path)
-                elif api['match'] == 'string_and':
-                    and_match_str = True
-                    match_list = get_list_match_items(api)
-                    for match in match_list:
-                        if (match in tmp_data) is False:
-                            and_match_str = False
-                            break
-                    if and_match_str:
-                        add_apis(api_findings, api['desc'], file_path)
-                elif api['match'] == 'string_or':
-                    match_list = get_list_match_items(api)
-                    for match in match_list:
-                        if match in tmp_data:
-                            add_apis(api_findings, api['desc'], file_path)
-                            break
-                elif api['match'] == 'string_and_or':
-                    match_list = get_list_match_items(api)
-                    string_or_stat = False
-                    for match in match_list:
-                        if match in tmp_data:
-                            string_or_stat = True
-                            break
-                    if string_or_stat and (api['string1'] in tmp_data):
-                        add_apis(api_findings, api['desc'], file_path)
-                elif api['match'] == 'string_or_and':
-                    match_list = get_list_match_items(api)
-                    string_and_stat = True
-                    for match in match_list:
-                        if match in tmp_data is False:
-                            string_and_stat = False
-                            break
-                    if string_and_stat or (api['string1'] in tmp_data):
-                        add_apis(api_findings, api['desc'], file_path)
-                elif api['match'] == 'string_and_perm':
-                    if (api['perm'] in perms) and (api['string1'] in tmp_data):
-                        add_apis(api_findings, api['desc'], file_path)
-                elif api['match'] == 'string_or_and_perm':
-                    match_list = get_list_match_items(api)
-                    string_or_ps = False
-                    for match in match_list:
-                        if match in tmp_data:
-                            string_or_ps = True
-                            break
-                    if (api['perm'] in perms) and string_or_ps:
-                        add_apis(api_findings, api['desc'], file_path)
-                else:
-                    logger.error('API String Rule Match Error\n%s', api)
-            else:
-                logger.error('API Rule Error\n%s', api)
-    except Exception:
-        logger.exception('Error in API Rule Processing')
+def handle_pdf_win(static_db):
+    logger.info(
+        'Fetching data from DB for '
+        'PDF Report Generation (APPX)')
+    context = wdb(static_db)
+    template = get_template(
+        'pdf/windows_report.html')
+    return context, template
 
 
 def url_n_email_extract(dat, relative_path):
@@ -543,7 +287,7 @@ def url_n_email_extract(dat, relative_path):
             {'urls': urls, 'path': escape(relative_path)})
 
     # Email Extraction Regex
-    regex = re.compile(r'[\w.-]+@[\w-]+\.[\w]{2,}')
+    regex = re.compile(r'[\w.-]{1,20}@[\w-]{1,20}\.[\w]{2,10}')
     eflag = 0
     for email in regex.findall(dat.lower()):
         if (email not in emails) and (not email.startswith('//')):
@@ -556,13 +300,17 @@ def url_n_email_extract(dat, relative_path):
 
 
 # This is just the first sanity check that triggers generic_compare
-def compare_apps(request, hash1: str, hash2: str):
+def compare_apps(request, hash1: str, hash2: str, api=False):
     if hash1 == hash2:
         error_msg = 'Results with same hash cannot be compared'
-        return print_n_send_error_response(request, error_msg, False)
+        return print_n_send_error_response(request, error_msg, api)
+    # Second Validation for REST API
+    if not (is_md5(hash1) and is_md5(hash2)):
+        error_msg = 'Invalid hashes'
+        return print_n_send_error_response(request, error_msg, api)
     logger.info(
         'Starting App compare for %s and %s', hash1, hash2)
-    return generic_compare(request, hash1, hash2)
+    return generic_compare(request, hash1, hash2, api)
 
 
 def score(findings):
@@ -570,28 +318,20 @@ def score(findings):
     cvss_scores = []
     avg_cvss = 0
     app_score = 100
-    if isinstance(findings, list):
-        for finding in findings:
-            if 'cvss' in finding:
-                if finding['cvss'] != 0:
-                    cvss_scores.append(finding['cvss'])
-            if finding['level'] == 'high':
-                app_score = app_score - 15
-            elif finding['level'] == 'warning':
-                app_score = app_score - 10
-            elif finding['level'] == 'good':
-                app_score = app_score + 5
-    else:
-        for _, finding in findings.items():
-            if 'cvss' in finding:
-                if finding['cvss'] != 0:
-                    cvss_scores.append(finding['cvss'])
-            if finding['level'] == 'high':
-                app_score = app_score - 15
-            elif finding['level'] == 'warning':
-                app_score = app_score - 10
-            elif finding['level'] == 'good':
-                app_score = app_score + 5
+    for finding in findings.values():
+        find = finding.get('metadata')
+        if not find:
+            # Hack to support iOS Binary Scan Results
+            find = finding
+        if find.get('cvss'):
+            if find['cvss'] != 0:
+                cvss_scores.append(find['cvss'])
+        if find['severity'] == 'high':
+            app_score = app_score - 15
+        elif find['severity'] == 'warning':
+            app_score = app_score - 10
+        elif find['severity'] == 'good':
+            app_score = app_score + 5
     if cvss_scores:
         avg_cvss = round(sum(cvss_scores) / len(cvss_scores), 1)
     if app_score < 0:
@@ -604,7 +344,7 @@ def score(findings):
 def update_scan_timestamp(scan_hash):
     # Update the last scan time.
     tms = timezone.now()
-    RecentScansDB.objects.filter(MD5=scan_hash).update(TS=tms)
+    RecentScansDB.objects.filter(MD5=scan_hash).update(TIMESTAMP=tms)
 
 
 def open_firebase(url):

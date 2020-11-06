@@ -25,6 +25,12 @@ def static_analysis_test():
         http_client = Client()
         apk_dir = os.path.join(settings.BASE_DIR, 'StaticAnalyzer/test_files/')
         for filename in os.listdir(apk_dir):
+            if not filename.endswith((
+                    '.apk',
+                    '.ipa',
+                    '.appx',
+                    '.zip')):
+                continue
             fpath = os.path.join(apk_dir, filename)
             with open(fpath, 'rb') as filp:
                 response = http_client.post('/upload/', {'file': filp})
@@ -52,18 +58,20 @@ def static_analysis_test():
         logger.info('Running PDF Generation Test')
         if platform.system() in ['Darwin', 'Linux']:
             pdfs = [
-                '/PDF/?md5=3a552566097a8de588b8184b059b0158&type=APK',
-                '/PDF/?md5=6c23c2970551be15f32bbab0b5db0c71&type=IPA',
-                '/PDF/?md5=52c50ae824e329ba8b5b7a0f523efffe&type=ANDZIP',
-                '/PDF/?md5=57bb5be0ea44a755ada4a93885c3825e&type=IOSZIP',
-                '/PDF/?md5=8179b557433835827a70510584f3143e&type=APPX',
+                '/PDF/?md5=3a552566097a8de588b8184b059b0158',
+                '/PDF/?md5=6c23c2970551be15f32bbab0b5db0c71',
+                '/PDF/?md5=52c50ae824e329ba8b5b7a0f523efffe',
+                '/PDF/?md5=57bb5be0ea44a755ada4a93885c3825e',
+                '/PDF/?md5=8179b557433835827a70510584f3143e',
+                '/PDF/?md5=7b0a23bffc80bac05739ea1af898daad',
             ]
         else:
             pdfs = [
-                '/PDF/?md5=3a552566097a8de588b8184b059b0158&type=APK',
-                '/PDF/?md5=52c50ae824e329ba8b5b7a0f523efffe&type=ANDZIP',
-                '/PDF/?md5=57bb5be0ea44a755ada4a93885c3825e&type=IOSZIP',
-                '/PDF/?md5=8179b557433835827a70510584f3143e&type=APPX',
+                '/PDF/?md5=3a552566097a8de588b8184b059b0158',
+                '/PDF/?md5=52c50ae824e329ba8b5b7a0f523efffe',
+                '/PDF/?md5=57bb5be0ea44a755ada4a93885c3825e',
+                '/PDF/?md5=8179b557433835827a70510584f3143e',
+                '/PDF/?md5=7b0a23bffc80bac05739ea1af898daad',
             ]
 
         for pdf in pdfs:
@@ -97,12 +105,14 @@ def static_analysis_test():
                          '6c23c2970551be15f32bbab0b5db0c71',
                          '52c50ae824e329ba8b5b7a0f523efffe',
                          '57bb5be0ea44a755ada4a93885c3825e',
-                         '8179b557433835827a70510584f3143e']
+                         '8179b557433835827a70510584f3143e',
+                         '7b0a23bffc80bac05739ea1af898daad']
         else:
             scan_md5s = ['3a552566097a8de588b8184b059b0158',
                          '52c50ae824e329ba8b5b7a0f523efffe',
                          '57bb5be0ea44a755ada4a93885c3825e',
-                         '8179b557433835827a70510584f3143e']
+                         '8179b557433835827a70510584f3143e',
+                         '7b0a23bffc80bac05739ea1af898daad']
         for md5 in scan_md5s:
             resp = http_client.post('/delete_scan/', {'md5': md5})
             if resp.status_code == 200:
@@ -131,6 +141,12 @@ def api_test():
         http_client = Client()
         apk_dir = os.path.join(settings.BASE_DIR, 'StaticAnalyzer/test_files/')
         for filename in os.listdir(apk_dir):
+            if not filename.endswith((
+                    '.apk',
+                    '.ipa',
+                    '.appx',
+                    '.zip')):
+                continue
             fpath = os.path.join(apk_dir, filename)
             if (platform.system() not in ['Darwin', 'Linux']
                     and fpath.endswith('.ipa')):
@@ -173,36 +189,46 @@ def api_test():
         else:
             logger.error('Scan List API Test 2')
             return True
+        resp = http_client.get('/api/v1/scans', HTTP_X_MOBSF_API_KEY=auth)
+        if resp.status_code == 200:
+            logger.info('Scan List API Test with custom http header 1 success')
+        else:
+            logger.error('Scan List API Test with custom http header 1')
+            return True
+        resp = http_client.get(
+            '/api/v1/scans?page=1&page_size=10', HTTP_X_MOBSF_API_KEY=auth)
+        if resp.status_code == 200:
+            logger.info('Scan List API Test with custom http header 2 success')
+        else:
+            logger.error('Scan List API Test with custom http header 2')
+            return True
         logger.info('[OK] Scan List API tests completed')
         # PDF Tests
         logger.info('Running PDF Generation API Test')
         if platform.system() in ['Darwin', 'Linux']:
             pdfs = [
-                {'hash': '3a552566097a8de588b8184b059b0158',
-                 'scan_type': 'apk'},
-                {'hash': '6c23c2970551be15f32bbab0b5db0c71',
-                 'scan_type': 'ipa'},
-                {'hash': '52c50ae824e329ba8b5b7a0f523efffe',
-                 'scan_type': 'andzip'},
-                {'hash': '57bb5be0ea44a755ada4a93885c3825e',
-                 'scan_type': 'ioszip'},
-                {'hash': '8179b557433835827a70510584f3143e',
-                 'scan_type': 'appx'},
+                {'hash': '3a552566097a8de588b8184b059b0158'},
+                {'hash': '6c23c2970551be15f32bbab0b5db0c71'},
+                {'hash': '52c50ae824e329ba8b5b7a0f523efffe'},
+                {'hash': '57bb5be0ea44a755ada4a93885c3825e'},
+                {'hash': '8179b557433835827a70510584f3143e'},
+                {'hash': '7b0a23bffc80bac05739ea1af898daad'},
             ]
         else:
             pdfs = [
-                {'hash': '3a552566097a8de588b8184b059b0158',
-                 'scan_type': 'apk'},
-                {'hash': '52c50ae824e329ba8b5b7a0f523efffe',
-                 'scan_type': 'andzip'},
-                {'hash': '57bb5be0ea44a755ada4a93885c3825e',
-                 'scan_type': 'ioszip'},
-                {'hash': '8179b557433835827a70510584f3143e',
-                 'scan_type': 'appx'},
+                {'hash': '3a552566097a8de588b8184b059b0158'},
+                {'hash': '52c50ae824e329ba8b5b7a0f523efffe'},
+                {'hash': '57bb5be0ea44a755ada4a93885c3825e'},
+                {'hash': '8179b557433835827a70510584f3143e'},
+                {'hash': '7b0a23bffc80bac05739ea1af898daad'},
             ]
         for pdf in pdfs:
             resp = http_client.post(
                 '/api/v1/download_pdf', pdf, HTTP_AUTHORIZATION=auth)
+            resp_custom = http_client.post(
+                '/api/v1/download_pdf', pdf, HTTP_X_MOBSF_API_KEY=auth)
+            assert (resp.status_code == 200)
+            assert (resp_custom.status_code == 200)
             if (resp.status_code == 200
                     and resp._headers['content-type'][1] == 'application/pdf'):
                 logger.info('[OK] PDF Report Generated: %s', pdf['hash'])
@@ -217,6 +243,10 @@ def api_test():
         for jsn in pdfs:
             resp = http_client.post(
                 '/api/v1/report_json', jsn, HTTP_AUTHORIZATION=auth)
+            resp_custom = http_client.post(
+                '/api/v1/report_json', jsn, HTTP_X_MOBSF_API_KEY=auth)
+            assert (resp.status_code == 200)
+            assert (resp_custom.status_code == 200)
             if (resp.status_code == 200
                     and resp._headers['content-type'][1] == ctype):
                 logger.info('[OK] JSON Report Generated: %s', jsn['hash'])
@@ -243,6 +273,10 @@ def api_test():
         for sfile in files:
             resp = http_client.post(
                 '/api/v1/view_source', sfile, HTTP_AUTHORIZATION=auth)
+            resp_custom = http_client.post(
+                '/api/v1/view_source', sfile, HTTP_X_MOBSF_API_KEY=auth)
+            assert (resp.status_code == 200)
+            assert (resp_custom.status_code == 200)
             if resp.status_code == 200:
                 dat = json.loads(resp.content.decode('utf-8'))
                 if dat['title']:
@@ -254,7 +288,31 @@ def api_test():
                 logger.error('Reading - %s', sfile['file'])
                 return True
         logger.info('[OK] View Source API test completed')
-        logger.info('Running Delete Scan API Results test')
+        # Compare apps test
+        logger.info('Running App Compare API tests')
+        resp = http_client.post(
+            '/api/v1/compare',
+            {
+                'hash1': '3a552566097a8de588b8184b059b0158',
+                'hash2': '52c50ae824e329ba8b5b7a0f523efffe',
+            },
+            HTTP_AUTHORIZATION=auth)
+        assert (resp.status_code == 200)
+        resp_custom = http_client.post(
+            '/api/v1/compare',
+            {
+                'hash1': '3a552566097a8de588b8184b059b0158',
+                'hash2': '52c50ae824e329ba8b5b7a0f523efffe',
+            },
+            HTTP_X_MOBSF_API_KEY=auth)
+        assert (resp_custom.status_code == 200)
+        if resp.status_code == 200:
+            logger.info('[OK] App compare API tests completed')
+        else:
+            logger.error('App compare API tests failed')
+            logger.info(resp.content)
+            return True
+        logger.info('Running Delete Scan Results test')
         # Deleting Scan Results
         if platform.system() in ['Darwin', 'Linux']:
             scan_md5s = ['3a552566097a8de588b8184b059b0158',
@@ -262,12 +320,14 @@ def api_test():
                          '52c50ae824e329ba8b5b7a0f523efffe',
                          '57bb5be0ea44a755ada4a93885c3825e',
                          '8179b557433835827a70510584f3143e',
+                         '7b0a23bffc80bac05739ea1af898daad',
                          ]
         else:
             scan_md5s = ['3a552566097a8de588b8184b059b0158',
                          '52c50ae824e329ba8b5b7a0f523efffe',
                          '57bb5be0ea44a755ada4a93885c3825e',
                          '8179b557433835827a70510584f3143e',
+                         '7b0a23bffc80bac05739ea1af898daad',
                          ]
         for md5 in scan_md5s:
             resp = http_client.post(

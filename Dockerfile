@@ -1,5 +1,5 @@
 # Base image
-FROM ubuntu:18.04
+FROM ubuntu:20.04
 
 # Labels and Credits
 LABEL \
@@ -14,19 +14,14 @@ LABEL \
 ENV DEBIAN_FRONTEND="noninteractive" \
     ANALYZER_IDENTIFIER="" \
     JDK_FILE="openjdk-12_linux-x64_bin.tar.gz" \
-    WKH_FILE="wkhtmltox_0.12.1.4-1.bionic_amd64.deb"
+    WKH_FILE="wkhtmltox_0.12.5-1.focal_amd64.deb"
 
 ENV JDK_URL="https://download.java.net/java/GA/jdk12/GPL/${JDK_FILE}" \
-    WKH_URL="https://builds.wkhtmltopdf.org/0.12.1.4/${WKH_FILE}"
+    WKH_URL="https://github.com/wkhtmltopdf/wkhtmltopdf/releases/download/0.12.5/${WKH_FILE}"
 
 # See https://docs.docker.com/develop/develop-images/dockerfile_best-practices/#run
-RUN apt update -y && apt install -y \
+RUN apt update -y && apt install -y  --no-install-recommends \
     build-essential \
-    git \
-    libssl-dev \
-    libffi-dev \
-    libxml2-dev \
-    libxslt1-dev \
     locales \
     sqlite3 \
     fontconfig-config \
@@ -37,7 +32,7 @@ RUN apt update -y && apt install -y \
     fontconfig \
     xfonts-75dpi \
     xfonts-base \
-    python3.6 \
+    python3.8 \
     python3-dev \
     python3-pip \
     wget \
@@ -62,19 +57,18 @@ ENV JAVA_HOME="/jdk-12"
 ENV PATH="$JAVA_HOME/bin:$PATH"
 
 WORKDIR /root/Mobile-Security-Framework-MobSF
-COPY ./requirements.txt .
+
+# Copy static
+COPY requirements.txt .
+COPY scripts/wheels/*.whl scripts/wheels/
 
 # Install Requirements
-RUN pip3 install --upgrade wheel && \
-    pip3 wheel --wheel-dir=yara-python --build-option="build" --build-option="--enable-dex" git+https://github.com/VirusTotal/yara-python.git@v3.10.0 && \
-    pip3 install --no-index --find-links=yara-python yara-python && \
-    rm -rf yara-python
-RUN pip3 install --quiet --no-cache-dir -r requirements.txt
+RUN pip3 install --no-index --find-links=scripts/wheels/ yara-python && \
+    pip3 install --quiet --no-cache-dir -r requirements.txt
 
 # Cleanup
 RUN \
     apt remove -y \
-        git \
         libssl-dev \
         libffi-dev \
         libxml2-dev \
@@ -89,12 +83,21 @@ RUN \
 # Copy source code
 COPY . .
 
+# Remove Wheels 
+RUN rm -rf /root/Mobile-Security-Framework-MobSF/scripts/wheels > /dev/null 2>&1 
+
 # Enable Use Home Directory and set adb path
 RUN sed -i 's/USE_HOME = False/USE_HOME = True/g' MobSF/settings.py && \
     sed -i "s#ADB_BINARY = ''#ADB_BINARY = '/usr/bin/adb'#" MobSF/settings.py
 
 # Postgres support is set to false by default
 ARG POSTGRES=False
+
+ENV POSTGRES_USER=postgres
+ENV POSTGRES_PASSWORD=password
+ENV POSTGRES_DB=mobsf
+ENV POSTGRES_HOST=postgres
+
 # Check if Postgres support needs to be enabled
 WORKDIR /root/Mobile-Security-Framework-MobSF/scripts
 RUN chmod +x postgres_support.sh; sync; ./postgres_support.sh $POSTGRES
@@ -108,9 +111,7 @@ EXPOSE 8000
 # MobSF Proxy
 EXPOSE 1337
 
-RUN python3 manage.py makemigrations && \
-    python3 manage.py makemigrations StaticAnalyzer && \
-    python3 manage.py migrate
+RUN chmod 755 /root/Mobile-Security-Framework-MobSF/scripts/entrypoint.sh
 
 # Run MobSF
-CMD ["gunicorn", "-b", "0.0.0.0:8000", "MobSF.wsgi:application", "--workers=1", "--threads=10", "--timeout=1800"]
+CMD ["/root/Mobile-Security-Framework-MobSF/scripts/entrypoint.sh"]

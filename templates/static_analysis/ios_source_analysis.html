@@ -169,7 +169,7 @@
             </a>
           </li>
             <li class="nav-item">
-              <a href="../PDF/?md5={{ md5 }}&amp;type=IOSZIP" class="nav-link">
+              <a href="../PDF/?md5={{ md5 }}" class="nav-link">
               <i class="nav-icon fas fa-file-pdf"></i>
               <p>
                 PDF Report
@@ -219,7 +219,7 @@
                 <div class="row">
                 <div class="col-2">
                   <p><strong><i class="fas fa-check-double"></i> APP SCORES</strong></p>
-                  <img id="app_icon" src="{% if not appstore_details.error %}{{appstore_details.icon}}{% else %}{% static 'img/no_icon.png' %}{% endif %}"/>
+                  <img id="app_icon" src="{% if not appstore_details.error %}{{appstore_details.icon}}{% elif icon_found %}/download/{{ md5 }}-icon.png{% else %}{% static 'img/no_icon.png' %}{% endif %}"/>
                   <br/>
                   <span class="badge bg-info">Average CVSS</span> <strong>{{ average_cvss }} </strong><br/>
                   <span class="badge bg-{% if security_score < 50 %}danger{% elif security_score == 100 %}success{% else %}warning{% endif %}">Security Score</span> <strong>{{ security_score }}/100 </strong><br/>
@@ -240,7 +240,9 @@
                 <div class="col-5">
                   <p><strong><i class="fas fa-info"></i> APP INFORMATION </strong></p>                                       
                   <span class="badge bg-primary">App Name</span>
-                  {{ app_name }}<br/>              
+                  {{ app_name }}<br/>
+                  <span class="badge bg-primary">App Type</span>
+                  {{ app_type }}<br/>                               
                   <span class="badge bg-primary">Identifier</span>
                   {{ bundle_id }}<br/>
                   <span class="badge bg-primary">SDK Name</span>
@@ -288,7 +290,7 @@
                         {{ cat }}, 
                         {% endfor %}
                       <span class="badge bg-info">App Store URL</span>
-                        <a target="_blank" href="{{ appstore_details.itunes_url }}">{{ appstore_details.app_id }} </a>
+                        <a target="_blank" href="{{ appstore_details.itunes_url }}" rel="noopener noreferrer">{{ appstore_details.app_id }} </a>
                       <br/>
                     <span class="badge bg-info">Developer</span>
                         {{appstore_details.developer}},
@@ -372,9 +374,11 @@
                         {% endif %}
                       </td>
                       <td>
+                        {% if scheme|key:"CFBundleURLSchemes" %}
                         {% for ul in scheme.CFBundleURLSchemes %}
                            {{ul}} <br/>
                         {% endfor %}
+                        {% endif %}
                       </td>
                     </tr>
                     {% endfor %}
@@ -411,6 +415,7 @@
                   <thead>
                       <tr>
                           <th>PERMISSIONS</th>
+                          <th>STATUS</th>
                           <th>DESCRIPTION</th>
                           <th>REASON IN MANIFEST</th>
                       </tr>
@@ -421,6 +426,13 @@
                     <tr>
                       <td>
                         {{ perm.name }}
+                      </td>
+                      <td>
+                        {% if perm.status == 'dangerous' %}
+                            <span class="badge bg-danger">dangerous</span>
+                          {% else %}
+                            <span class="badge bg-info">normal</span>
+                        {% endif %}
                       </td>
                       <td>
                         {{ perm.description}}
@@ -455,7 +467,7 @@
         <div class="card">
           <div class="card-body">
               <p>
-             <strong><i class="fab fa-apple"></i> iOS OBJECTIVE C API</strong>
+             <strong><i class="fab fa-apple"></i> iOS API</strong>
              </p>
               <div class="table-responsive">
                            <table class="table table-bordered table-hover table-striped">
@@ -466,14 +478,14 @@
                       </tr>
                     </thead>
                     <tbody>
-                  {% for desc, details in ios_api.items %}
+                   {% for rule, details in  ios_api.items %}
                   <tr>
                   <td>
-                  {{ desc }}
+                  {{ details.metadata.description }}
                   </td>
                   <td>
-                  {% for path in details|key:"path" %}
-                   <a href="../ViewFile/?file={{ path }}&amp;md5={{ md5 }}&amp;type=ios"> {{ path }}</a>
+                  {% for file_path, lines  in details.files.items %}
+                   <a href="../ViewFile/?file={{ file_path }}&amp;md5={{ md5 }}&amp;type=ios&amp;lines={{ lines }}"> {{ file_path }}</a>
                   </br>
                   {% endfor %}
                   </td>
@@ -506,6 +518,7 @@
 
                   <thead>
                       <tr>
+                        <th>NO</th>
                         <th>ISSUE</th>
                         <th>STATUS</th>
                         <th>DESCRIPTION</th>
@@ -515,18 +528,28 @@
                     {% if ats_analysis|length > 0 %}
                       {% for findings in ats_analysis %}
                       <tr>
+                        <td>{{ forloop.counter }}</td>
                         <td>
-                         {{findings.issue}}
+                        {{findings.issue}}
                         <td>
+                          {% if findings.status == "insecure" %}
                           <span class="badge bg-danger"> {{findings.status}}</span>
-                        </td>
+                          {% elif findings.status == "secure" %}
+                          <span class="badge bg-success"> {{findings.status}}</span>
+                          {% elif findings.status == "warning" %}
+                          <span class="badge bg-warning"> {{findings.status}}</span>
+                          {% elif findings.status == "info" %}
+                          <span class="badge bg-info"> {{findings.status}}</span>
+                          {% endif %}
+                          </td>
                         <td>
-                         {{findings.description}}
+                        {{findings.description}}
                         </td>
                       </tr>
                       {% endfor %}
                     {% else %}
                     <tr>
+                      <td></td>
                       <td>
                         No ATS exceptions found.
                       <td>
@@ -564,45 +587,58 @@
                    <table class="table table-bordered table-hover table-striped">
                   <thead>
                       <tr>
+                          <th>NO</th>
                           <th>ISSUE</th>
                           <th>SEVERITY</th>
-                          <th>CVSS</th>
-                          <th>CWE</th>
-                          <th>OWASP</th>
+                          <th>STANDARDS</th>
                           <th>FILES</th>
 
                       </tr>
                   </thead>
                   <tbody>
-                     {% for issue, details in code_analysis.items %}
+                    {% for rule, details in code_analysis.items %}
                   <tr>
+                  <td>{{ forloop.counter }}</td>
                   <td>
-                  {{ issue }}
+                  {{ details.metadata.description }}
                   </td>
                   <td>
-                    {% if details|key:"level" == "high" %}
+                    {% if details.metadata.severity == "high" %}
                       <span class="badge bg-danger">high</span>
-                      {% elif details|key:"level" == "good" %}
+                      {% elif details.metadata.severity == "good" %}
                       <span class="badge bg-success">secure</span>
-                      {% elif details|key:"level" == "warning" %}
+                      {% elif details.metadata.severity == "warning" %}
                       <span class="badge bg-warning">warning</span>
-                      {% elif details|key:"level" == "info" %}
+                      {% elif details.metadata.severity == "info" %}
                       <span class="badge bg-info">info</span>
-                      {% endif %}
+                    {% endif %}
                   </td>
-                  <td><strong>{{ details|key:"cvss" }}</strong></td>
-                  <td><strong>{{ details|key:"cwe" }}</strong></td>
-                  <td><strong>{{ details|key:"owasp" }}</strong></td>
                   <td>
-                  {% for path in details|key:"path" %}
-                   <a href="../ViewFile/?file={{ path }}&amp;md5={{ md5 }}&amp;type=ios"> {{ path }}</a>
+                      <strong>CVSS V2:</strong>
+                       {{ details.metadata.cvss }}
+                      {% if details.metadata.cvss > 6 %}
+                        (high)
+                      {% elif details.metadata.cvss == 0 %}
+                        (info)
+                      {% elif details.metadata.cvss >= 4 %}
+                        (medium)
+                      {% elif details.metadata.cvss < 4 %}
+                        (low)
+                      {% endif %}
+                      {% if details.metadata.cwe %}</br> <strong>CWE: </strong>{{details.metadata.cwe }}{% endif %}
+                      {% if details.metadata|key:"owasp-mobile" %}</br> <strong>OWASP Top 10: </strong>{{ details.metadata|key:"owasp-mobile" }}{% endif %}
+                      {% if details.metadata.masvs %}</br> <strong>OWASP MASVS: </strong>{{ details.metadata.masvs  }}{% endif %}
+                  </td>
+                  <td>
+                   {% for file_path, lines in details.files.items %}
+                   <a href="../ViewFile/?file={{ file_path }}&amp;md5={{ md5 }}&amp;type=ios&amp;lines={{ lines }}"> {{ file_path }}</a>
                   </br>
                   {% endfor %}
                   </td>
                 </tr>    
               {% endfor %} 
-                    </tbody>
-                    </table>
+           </tbody>
+          </table>
             </div>
           </div>
         </div><!-- /.card -->
@@ -627,6 +663,7 @@
                  <table class="table table-bordered table-hover table-striped">
                   <thead>
                       <tr>
+                          <th>NO</th>
                           <th>ISSUE</th>
                           <th>FILES</th>
                       </tr>
@@ -634,6 +671,7 @@
                   <tbody>
                     {% for item in file_analysis %}
                     <tr>
+                      <td>{{ forloop.counter }}</td>
                       <td>
                         {{ item.issue }}
                       </td>
@@ -678,6 +716,7 @@
                   <tr>
                      <th>DOMAIN</th>
                      <th>STATUS</th>
+                     <th>GEOLOCATION</th>
                   </tr>
                  </thead>
                  <tbody>
@@ -694,7 +733,22 @@
                   {% else %}
                     <span class="badge bg-success">good</span><br/>
                   {% endif %}
-                  </td></tr>
+                  </td>
+                  <td>
+                    {% if details|key:"geolocation" %}
+                      <strong>IP: </strong>{{details|key:"geolocation"|key:"ip"}}  <br/>
+                      <strong>Country: </strong>{{details|key:"geolocation"|key:"country_long"}} <br/>
+                      <strong>Region: </strong>{{details|key:"geolocation"|key:"region"}} <br/>
+                      <strong>City: </strong>{{details|key:"geolocation"|key:"city"}} <br/>
+                      <strong>Latitude: </strong>{{details|key:"geolocation"|key:"latitude"}} <br/>
+                      <strong>Longitude: </strong>{{details|key:"geolocation"|key:"longitude"}} <br/>
+                      <strong>View: <a target="_blank" href="http://maps.google.com/maps?q={{details|key:"geolocation"|key:"latitude"}},{{details|key:"geolocation"|key:"longitude"}}">Google Map</a>
+
+                    {% else %}
+                    No Geolocation information available.
+                    {% endif %}
+                  </td>
+                  </tr>
                   {% endfor %}
                 </tbody>
             </table>

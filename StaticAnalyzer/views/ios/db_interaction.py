@@ -6,6 +6,7 @@ from django.conf import settings
 from MobSF.utils import python_dict, python_list
 
 from StaticAnalyzer.models import StaticAnalyzerIOS
+from StaticAnalyzer.models import RecentScansDB
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +34,13 @@ def get_context_from_db_entry(db_entry):
             'bundle_url_types': python_list(db_entry[0].BUNDLE_URL_TYPES),
             'bundle_supported_platforms':
                 python_list(db_entry[0].BUNDLE_SUPPORTED_PLATFORMS),
+            'icon_found': db_entry[0].ICON_FOUND,
             'info_plist': db_entry[0].INFO_PLIST,
-            'binary_info': python_dict(db_entry[0].MACHO_INFO),
+            'binary_info': python_dict(db_entry[0].BINARY_INFO),
             'permissions': python_list(db_entry[0].PERMISSIONS),
             'ats_analysis': python_list(db_entry[0].ATS_ANALYSIS),
             'binary_analysis': python_list(db_entry[0].BINARY_ANALYSIS),
+            'macho_analysis': python_dict(db_entry[0].MACHO_ANALYSIS),
             'ios_api': python_dict(db_entry[0].IOS_API),
             'code_analysis': python_dict(db_entry[0].CODE_ANALYSIS),
             'file_analysis': python_list(db_entry[0].FILE_ANALYSIS),
@@ -60,8 +63,7 @@ def get_context_from_analysis(app_dict,
                               info_dict,
                               code_dict,
                               bin_dict,
-                              files,
-                              sfiles):
+                              all_files):
     """Get the context for IPA/ZIP from analysis results."""
     try:
         context = {
@@ -83,16 +85,18 @@ def get_context_from_analysis(app_dict,
             'bundle_url_types': info_dict['bundle_url_types'],
             'bundle_supported_platforms':
                 info_dict['bundle_supported_platforms'],
+            'icon_found': app_dict['icon_found'],
             'info_plist': info_dict['plist_xml'],
-            'binary_info': bin_dict['macho'],
+            'binary_info': bin_dict['bin_info'],
             'permissions': info_dict['permissions'],
             'ats_analysis': info_dict['inseccon'],
-            'binary_analysis': bin_dict['bin_res'],
+            'binary_analysis': bin_dict['bin_code_analysis'],
+            'macho_analysis': bin_dict['checksec'],
             'ios_api': code_dict['api'],
             'code_analysis': code_dict['code_anal'],
-            'file_analysis': sfiles,
-            'libraries': bin_dict['libs'],
-            'files': files,
+            'file_analysis': all_files['special_files'],
+            'libraries': bin_dict['libraries'],
+            'files': all_files['files_short'],
             'urls': code_dict['urlnfile'],
             'domains': code_dict['domains'],
             'emails': code_dict['emailnfile'],
@@ -110,8 +114,7 @@ def save_or_update(update_type,
                    info_dict,
                    code_dict,
                    bin_dict,
-                   files,
-                   sfiles) -> None:
+                   all_files):
     """Save/Update an IPA/ZIP DB entry."""
     try:
         values = {
@@ -131,16 +134,18 @@ def save_or_update(update_type,
             'BUNDLE_URL_TYPES': info_dict['bundle_url_types'],
             'BUNDLE_SUPPORTED_PLATFORMS':
                 info_dict['bundle_supported_platforms'],
+            'ICON_FOUND': app_dict['icon_found'],
             'INFO_PLIST': info_dict['plist_xml'],
-            'MACHO_INFO': bin_dict['macho'],
+            'BINARY_INFO': bin_dict['bin_info'],
             'PERMISSIONS': info_dict['permissions'],
             'ATS_ANALYSIS': info_dict['inseccon'],
-            'BINARY_ANALYSIS': bin_dict['bin_res'],
+            'BINARY_ANALYSIS': bin_dict['bin_code_analysis'],
+            'MACHO_ANALYSIS': bin_dict['checksec'],
             'IOS_API': code_dict['api'],
             'CODE_ANALYSIS': code_dict['code_anal'],
-            'FILE_ANALYSIS': sfiles,
-            'LIBRARIES': bin_dict['libs'],
-            'FILES': files,
+            'FILE_ANALYSIS': all_files['special_files'],
+            'LIBRARIES': bin_dict['libraries'],
+            'FILES': all_files['files_short'],
             'URLS': code_dict['urlnfile'],
             'DOMAINS': code_dict['domains'],
             'EMAILS': code_dict['emailnfile'],
@@ -155,3 +160,13 @@ def save_or_update(update_type,
                 MD5=app_dict['md5_hash']).update(**values)
     except Exception:
         logger.exception('Updating DB')
+    try:
+        values = {
+            'APP_NAME': info_dict['bin_name'],
+            'PACKAGE_NAME': info_dict['id'],
+            'VERSION_NAME': info_dict['bundle_version_name'],
+        }
+        RecentScansDB.objects.filter(
+            MD5=app_dict['md5_hash']).update(**values)
+    except Exception:
+        logger.exception('Updating RecentScansDB')

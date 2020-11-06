@@ -1,19 +1,24 @@
 # -*- coding: utf_8 -*-
 # flake8: noqa
 """Module for android manifest analysis."""
-
-import io
 import logging
 import os
 import subprocess
 import tempfile
+from pathlib import Path
 from xml.dom import minidom
 
 from django.conf import settings
 
-from MobSF.utils import is_file_exists
+from MobSF.utils import (
+    find_java_binary,
+    is_file_exists,
+)
 
-from StaticAnalyzer.views.android import android_manifest_desc
+from StaticAnalyzer.views.android import (
+    android_manifest_desc,
+    network_security,
+)
 
 # pylint: disable=E0401
 from .dvm_permissions import DVM_PERMISSIONS
@@ -28,11 +33,20 @@ ANDROID_5_0_LEVEL = 21
 def get_manifest(app_path, app_dir, tools_dir, typ, binary):
     """Get the manifest file."""
     try:
-        manifest = None
-        dat = read_manifest(app_dir, app_path, tools_dir, typ, binary)
+        manifest_file = get_manifest_file(
+            app_dir,
+            app_path,
+            tools_dir,
+            typ,
+            binary)
+        mfile = Path(manifest_file)
+        if mfile.exists():
+            manifest = mfile.read_text('utf-8', 'ignore')
+        else:
+            manifest = ''
         try:
             logger.info('Parsing AndroidManifest.xml')
-            manifest = minidom.parseString(dat)
+            manifest = minidom.parseString(manifest)
         except Exception:
             err = ('apktool failed to extract '
                    'AndroidManifest.xml or parsing failed')
@@ -45,7 +59,7 @@ def get_manifest(app_path, app_dir, tools_dir, typ, binary):
                  r'platformBuildVersionCode="Failed" '
                  r'platformBuildVersionName="Failed XML Parsing" ></manifest>'))
             logger.warning('Using Fake XML to continue the Analysis')
-        return manifest
+        return manifest_file, manifest
     except Exception:
         logger.exception('Parsing Manifest file')
 
@@ -228,7 +242,7 @@ def get_browsable_activities(node):
         logger.exception('Getting Browsable Activities')
 
 
-def manifest_analysis(mfxml, man_data_dic):
+def manifest_analysis(mfxml, man_data_dic, src_type, app_dir):
     """Analyse manifest file."""
     # pylint: disable=C0301
     try:
@@ -247,6 +261,8 @@ def manifest_analysis(mfxml, man_data_dic):
         browsable_activities = {}
         permission_dict = {}
         icon_hidden = True
+        do_netsec = False
+        debuggable = False
         # PERMISSION
         for permission in permissions:
             if permission.getAttribute('android:protectionLevel'):
@@ -283,9 +299,12 @@ def manifest_analysis(mfxml, man_data_dic):
             if application.getAttribute('android:directBootAware') == 'true':
                 ret_list.append(('a_boot_aware', (), ()))
             if application.getAttribute('android:networkSecurityConfig'):
-                ret_list.append(('a_network_sec', (), ()))
+                item = application.getAttribute('android:networkSecurityConfig')
+                ret_list.append(('a_network_sec', (item,), ()))
+                do_netsec = item
             if application.getAttribute('android:debuggable') == 'true':
                 ret_list.append(('a_debuggable', (), ()))
+                debuggable = True
             if application.getAttribute('android:allowBackup') == 'true':
                 ret_list.append(('a_allowbackup', (), ()))
             elif application.getAttribute('android:allowBackup') == 'false':
@@ -515,14 +534,14 @@ def manifest_analysis(mfxml, man_data_dic):
                                             elif protlevel == 'signatureOrSystem':
                                                 ret_list.append(
                                                     ('a_prot_sign_sys', (itemname, item, perm + prot), (an_or_a, itemname)))
-                                        else:
-                                            ret_list.append(
-                                                ('a_prot_unknown', (itemname, item, perm), (an_or_a, itemname)))
-                                            if itemname in ['Activity', 'Activity-Alias']:
-                                                exported.append(item)
-                                            exp_count[cnt_id] = exp_count[
-                                                cnt_id] + 1
-                                        # Esteve 24.07.2016 - end
+                                    else:
+                                        ret_list.append(
+                                            ('a_prot_unknown', (itemname, item, perm), (an_or_a, itemname)))
+                                        if itemname in ['Activity', 'Activity-Alias']:
+                                            exported.append(item)
+                                        exp_count[cnt_id] = exp_count[
+                                            cnt_id] + 1
+                                    # Esteve 24.07.2016 - end
                                 else:
                                     # Esteve 24.07.2016 - begin - At this point, we are dealing with components that do not have a permission neither at the component level nor at the
                                     # application level. As they are exported,
@@ -815,49 +834,38 @@ def manifest_analysis(mfxml, man_data_dic):
             'browsable_activities': browsable_activities,
             'permissons': permissons,
             'icon_hidden': icon_hidden,
+            'network_security': network_security.analysis(
+                app_dir,
+                do_netsec,
+                debuggable,
+                src_type),
         }
         return man_an_dic
     except Exception:
         logger.exception('Performing Manifest Analysis')
 
 
-def read_manifest(app_dir, app_path, tools_dir, typ, apk):
+def get_manifest_file(app_dir, app_path, tools_dir, typ, apk):
     """Read the manifest file."""
     try:
-        dat = ''
         manifest = ''
         if apk:
-            manifest = get_manifest_file(app_path, app_dir, tools_dir)
-            if is_file_exists(manifest):
-                logger.info('Reading Android Manifest')
-                with io.open(
-                    manifest,
-                    mode='r',
-                    encoding='utf8',
-                    errors='ignore',
-                ) as file_pointer:
-                    dat = file_pointer.read()
+            logger.info('Getting AndroidManifest.xml from APK')
+            manifest = get_manifest_apk(app_path, app_dir, tools_dir)
         else:
-            logger.info('Reading Manifest from Source')
+            logger.info('Getting AndroidManifest.xml from Source Code')
             if typ == 'eclipse':
                 manifest = os.path.join(app_dir, 'AndroidManifest.xml')
             elif typ == 'studio':
                 manifest = os.path.join(
                     app_dir,
                     'app/src/main/AndroidManifest.xml')
-            with io.open(
-                manifest,
-                mode='r',
-                encoding='utf8',
-                errors='ignore',
-            ) as file_pointer:
-                dat = file_pointer.read()
-        return dat
+        return manifest
     except Exception:
-        logger.exception('Reading Manifest file')
+        logger.exception('Getting AndroidManifest.xml file')
 
 
-def get_manifest_file(app_path, app_dir, tools_dir):
+def get_manifest_apk(app_path, app_dir, tools_dir):
     """Get readable AndroidManifest.xml."""
     try:
         manifest = None
@@ -867,7 +875,7 @@ def get_manifest_file(app_path, app_dir, tools_dir):
         else:
             apktool_path = os.path.join(tools_dir, 'apktool_2.4.1.jar')
         output_dir = os.path.join(app_dir, 'apktool_out')
-        args = [settings.JAVA_BINARY,
+        args = [find_java_binary(),
                 '-jar',
                 apktool_path,
                 '--match-original',

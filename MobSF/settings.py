@@ -9,8 +9,10 @@ import imp
 import logging
 import os
 
-from MobSF.utils import (find_java_binary, first_run,
-                         get_mobsf_home)
+from MobSF.init import (
+    first_run,
+    get_mobsf_home,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,16 +21,16 @@ logger = logging.getLogger(__name__)
 # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 
-MOBSF_VER = 'v3.0.0 Beta'
+MOBSF_VER = 'v3.1.8 Beta'
 
 BANNER = """
-  __  __       _    ____  _____       _____  ___  
- |  \/  | ___ | |__/ ___||  ___|_   _|___ / / _ \ 
- | |\/| |/ _ \| '_ \___ \| |_  \ \ / / |_ \| | | |
- | |  | | (_) | |_) |__) |  _|  \ V / ___) | |_| |
- |_|  |_|\___/|_.__/____/|_|     \_/ |____(_)___/
+  __  __       _    ____  _____       _____  _ 
+ |  \/  | ___ | |__/ ___||  ___|_   _|___ / / |
+ | |\/| |/ _ \| '_ \___ \| |_  \ \ / / |_ \ | |
+ | |  | | (_) | |_) |__) |  _|  \ V / ___) || |
+ |_|  |_|\___/|_.__/____/|_|     \_/ |____(_)_|
 """  # noqa: W291
-# ASCII Standard
+# ASCII Font: Standard
 # ==============================================
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # ==========MobSF Home Directory=================
@@ -39,7 +41,7 @@ USE_HOME = False
 # If you need multiple users to share the scan results set this to False
 # ===============================================
 
-MobSF_HOME = get_mobsf_home(USE_HOME)
+MobSF_HOME = get_mobsf_home(USE_HOME, BASE_DIR)
 # Logs Directory
 LOG_DIR = os.path.join(MobSF_HOME, 'logs/')
 # Download Directory
@@ -75,10 +77,10 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql_psycopg2',
         'NAME': 'mobsf',
-        'USER': 'postgres',
-        'PASSWORD': '',
-        'HOST': 'localhost',
-        'PORT': '',
+        'USER': os.environ['POSTGRES_USER'],
+        'PASSWORD': os.environ['POSTGRES_PASSWORD'],
+        'HOST': os.environ['POSTGRES_HOST'],
+        'PORT': 5432,
     }
 }
 # End Postgres support
@@ -176,7 +178,7 @@ MIDDLEWARE_CLASSES = (
 )
 
 MIDDLEWARE = (
-    'MobSF.views.api.rest_api_middleware.RestApiAuthMiddleware',
+    'MobSF.views.api.api_middleware.RestApiAuthMiddleware',
 )
 ROOT_URLCONF = 'MobSF.urls'
 WSGI_APPLICATION = 'MobSF.wsgi.application'
@@ -206,6 +208,10 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'static')
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedStaticFilesStorage'
 # 256MB
 DATA_UPLOAD_MAX_MEMORY_SIZE = 268435456
+# REST API only mode
+# Set MOBSF_API_ONLY to 1 to enable REST API only mode
+# In this mode, web UI related urls are disabled.
+API_ONLY = os.getenv('MOBSF_API_ONLY', '0')
 
 # ===================
 # USER CONFIGURATION
@@ -225,36 +231,23 @@ else:
     # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     #          MOBSF USER CONFIGURATIONS
     # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
     # -------------------------
     # STATIC ANALYZER SETTINGS
     # -------------------------
 
     # ==========ANDROID SKIP CLASSES==========================
-    # Common third party classes that will be skipped during static analysis
-    SKIP_CLASSES = [
-        r'com[\\\/]{1}google[\\\/]{1}',
-        r'com[\\\/]{1}android[\\\/]{1}',
-        r'android[\\\/]{1}content[\\\/]{1}',
-        r'android[\\\/]{1}support[\\\/]{1}',
-        r'android[\\\/]{1}arch[\\\/]{1}',
-        r'kotlin[\\\/]{1}',
-        r'androidx[\\\/]{1}',
-        r'okhttp2[\\\/]{1}', r'okhttp3[\\\/]{1}',
-        r'com[\\\/]{1}squareup[\\\/]{1}okhttp[\\\/]{1}',
-        r'com[\\\/]{1}twitter[\\\/]{1}',
-        r'twitter4j[\\\/]{1}',
-        r'org[\\\/]{1}apache[\\\/]{1}',
-        r'oauth[\\\/]{1}signpost[\\\/]{1}',
-        r'org[\\\/]{1}chromium[\\\/]{1}',
-        r'com[\\\/]{1}facebook[\\\/]{1}',
-        r'org[\\\/]{1}spongycastle[\\\/]{1}',
-        r'com[\\\/]{1}amazon[\\\/]{1}identity[\\\/]{1}',
-        r'io[\\\/]{1}fabric[\\\/]{1}sdk[\\\/]{1}',
-        r'com[\\\/]{1}instabug[\\\/]{1}',
-        r'io[\\\/]{1}fabric[\\\/]{1}sdk[\\\/]{1}',
-        r'com[\\\/]{1}crashlytics[\\\/]{1}android[\\\/]{1}',
-    ]
+    # Common third party classes/paths that will be skipped
+    # during static analysis
+    SKIP_CLASS_PATH = {
+        'com/google/', 'androidx', 'okhttp2/', 'okhttp3/',
+        'com/android/', 'com/squareup', 'okhttp/'
+        'android/content/', 'com/twitter/', 'twitter4j/',
+        'android/support/', 'org/apache/', 'oauth/signpost',
+        'android/arch', 'org/chromium/', 'com/facebook',
+        'org/spongycastle', 'org/bouncycastle',
+        'com/amazon/identity/', 'io/fabric/sdk',
+        'com/instabug', 'com/crashlytics/android',
+    }
 
     # ==============================================
 
@@ -282,7 +275,6 @@ else:
     ADB_BINARY = ''
 
     # iOS 3P Tools
-    OTOOL_BINARY = ''
     JTOOL_BINARY = ''
     CLASSDUMP_BINARY = ''
     CLASSDUMP_SWIFT_BINARY = ''
@@ -312,8 +304,8 @@ else:
     # ==============================================
 
     # ================HTTPS PROXY ===============
+    PROXY_IP = '127.0.0.1'
     PROXY_PORT = 1337  # Proxy Port
-    ROOT_CA = '0025aabb.0'
     # ===================================================
 
     # ========UPSTREAM PROXY SETTINGS ==============
@@ -335,11 +327,16 @@ else:
     # ==============================================
 
     # -----External URLS--------------------------
-    MALWARE_DB_URL = 'http://www.malwaredomainlist.com/mdlcsv.php'
+    MALWARE_DB_URL = 'https://www.malwaredomainlist.com/mdlcsv.php'
     VIRUS_TOTAL_BASE_URL = 'https://www.virustotal.com/vtapi/v2/file/'
     EXODUS_URL = 'https://reports.exodus-privacy.eu.org'
     APPMONSTA_URL = 'https://api.appmonsta.com/v1/stores/android/details/'
     ITUNES_URL = 'https://itunes.apple.com/lookup'
+    GITHUB_URL = ('https://raw.githubusercontent.com/'
+                  'MobSF/Mobile-Security-Framework-MobSF/'
+                  'master/MobSF/settings.py')
+    GOOGLE = 'https://www.google.com'
+    BAIDU = 'https://www.baidu.com/'
 
     # -------External -----------------------------
     # Get AppMonsta API from https://appmonsta.com/dashboard/get_api_key/
@@ -361,10 +358,6 @@ else:
     # ==============================================
     # ^CONFIG-END^: Do not edit this line
 
-
-# ============JAVA SETTINGS======================
-JAVA_BINARY = find_java_binary()
-# ===============================================
 
 # Better logging
 LOGGING = {
